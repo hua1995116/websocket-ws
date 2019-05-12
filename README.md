@@ -1,3 +1,4 @@
+
 ## 前置知识
 
 1 kb = 1024 byte
@@ -107,3 +108,9 @@ WebSocket传输的数据都是以Frame（帧）的形式实现的，就像TCP/UD
 ## generate
 
 
+## 工具
+
+1. 进制转化工具 https://tool.lu/hexconvert/
+2. js 进制转化 num.toStrong(2); (十进制转二进制)， parseInt(stringNum, 2); (二进制转十进制)
+3. js 数字氛围 -(2 ** 53 - 1) ~ (2 ** 53 -1)
+4. websocket 规范 https://tools.ietf.org/html/rfc6455#page-32
