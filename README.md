@@ -105,12 +105,114 @@ WebSocket传输的数据都是以Frame（帧）的形式实现的，就像TCP/UD
 
 ## parse
 
+因为 JavaScript 语言没有用于读取或操作二进制数据流的机制，而是用 buffer 来进行代替操作。
+
+### 第一个字节
+
+首先我们先来解析出前 8 个字节。占比情况如下(单位 bit)：
+
+FIN(1)，RSV1(1)，RSV2(1)，RSV3(1)，Opcode(4)
+
+我们先来获取出 buffer 中的第一个字节，buffer 可以理解为一个类似的数组，每一个值代表一个字节，并且以16进制存储。而一个字节等于八个bit。
+
+例如读出第一个 buffer 值为 7b, 如果将他转化为 10 进制为 123, 转化为2进制为 01111011, 因此我们肉眼可以看出, FIN = 0, RSV1 = 1, RSV2 = 1, RSV3 = 1, Opcode = 1011 (2进制表示)
+
+但是我们在代码中无法使用这样的方式来查看，因此我们需要用到位移(>>)符号和按位与(&)符号。
+
+```javascript
+r_queue // buffer  
+var FIN = r_queue[0] >> 7;
+var Opcode = r_queue[0] & 0x0F;
+```
+0x0F 转化为 2 进制为 `00001111`，获取后4位。
+
+### 第二个字节
+
+有了上面的描述相信你对如何解析数据有了初步的了解, 继续来解析第二个字节, 占比情况(单位 bit ):
+
+Mask(1), Payload length(7)
+
+```javascript
+r_queue // buffer  
+var MASK = r_queue[1] >> 7;
+var Payload_len = r_queue[1] & 0x7F;
+```
+0x7F 转化为 2 进制为 `01111111`, 用来获取后7位。
+
+
+如果 Payload_len 为 125， 则 Payload_len 长度就到此为止，如果Payload_len 为 126， 则后面的 2个字节 来代表长度， 可取范围为 0 - 65535。 如果Payload_len 为 127，则后面 8个字节 用来标识长度，可取范围为 0 - 2 ^ 64 -1  (1kb = 2 ^ 13 bit), 可以想象这个数值还是非常大的，基本可以认为 websocket 的存储数据量基本上没什么限制。
+
+**总结**：
+```
+Payload_len = 125， Payload_len = 4bit
+Payload_len = 126， Payload_len = 4 + 16 bit
+Payload_len = 125， Payload_len = 4 + 64 4bit
+```
+
+### 第三部分（因为可能前面 Payload_len 会占据额外的2个字节或者8个字节，所以称第三部分） 
+
+Masking-key(0/4 字节)
+
+如果前面获取的 mask = 1， 则在 Payload_len 后会额外占据 4个字节。
+
+
+Payload data 
+情况1:
+mask = 0，直接将获取剩余的buffer，转化为 string，即为我们传输的数据。
+情况2：
+mask = 1， 需要根据以下公式来进行额外计算。
+https://tools.ietf.org/html/rfc6455#page-32
+```
+Octet i of the transformed data ("transformed-octet-i") is the XOR of
+octet i of the original data ("original-octet-i") with octet at index
+i modulo 4 of the masking key ("masking-key-octet-j"):
+
+    j                   = i MOD 4
+    transformed-octet-i = original-octet-i XOR masking-key-octet-j
+
+The payload length, indicated in the framing as frame-payload-length,
+does NOT include the length of the masking key.  It is the length of
+the "Payload data", e.g., the number of bytes following the masking
+key.
+```
+公式：`当前字节[i]的实际值 = 当前数据[i] ^(异或) masking-key[j] (j = i % 4)`
+
 ## generate
 
+有了解析的过程，生成的过程就非常简单了。下面只考虑最简单的情况。不考虑掩码的情况, 只考虑长度小于 125， 126 的情况。
+
+```javascript
+const json = JSON.stringify(data)
+// 获取 buffer 长度
+const jsonByteLength = Buffer.byteLength(json);
+// 判断长度
+const lengthByteCount = jsonByteLength < 126 ? 0 : 2; 
+const payloadLength = lengthByteCount === 0 ? jsonByteLength : 126; 
+// 构造 buffer 长度 =  前面两个字节 + 后面的第三部分
+const buffer = Buffer.alloc(2 + lengthByteCount + jsonByteLength); 
+// 写入第一个字节
+buffer.writeUInt8(0b10000001, 0); 
+// 写入第二个字节
+buffer.writeUInt8(payloadLength, 1);
+let payloadOffset = 2; 
+// 如果长度大于 126
+if (lengthByteCount > 0) { 
+    // 偏移 2个字节写入
+    buffer.writeUInt16BE(jsonByteLength, 2); 
+    payloadOffset += lengthByteCount; 
+}
+// 写入数据
+buffer.write(json, payloadOffset); 
+```
 
 ## 工具
 
 1. 进制转化工具 https://tool.lu/hexconvert/
 2. js 进制转化 num.toStrong(2); (十进制转二进制)， parseInt(stringNum, 2); (二进制转十进制)
-3. js 数字氛围 -(2 ** 53 - 1) ~ (2 ** 53 -1)
+3. js 数字范围 -(2 ** 53 - 1) ~ (2 ** 53 -1)
 4. websocket 规范 https://tools.ietf.org/html/rfc6455#page-32
+
+
+## 参考
+1. https://github.com/abbshr/RocketEngine
+2. https://hackernoon.com/implementing-a-websocket-server-with-node-js-d9b78ec5ffa8
